@@ -97,5 +97,15 @@ To run end-to-end tests, configure a disposable private GitHub repository, valid
 - Qwen authentication: https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/auth.md
 - Expo native notifications: https://docs.expo.dev/push-notifications/sending-notifications-custom/
 - GitHub webhook security: https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
-
 - GitHub official Create PR form URL: https://docs.github.com/en/pull-requests/reference/using-query-parameters-to-create-a-pull-request
+
+
+## Automatic Android APK on changes to main
+
+GitHub Actions workflow [Android APK](https://github.com/smaks190-crypto/qwen-github-mobile/actions/workflows/android-apk.yml) runs on **every push to `main`**, including merged PRs. It can also be started manually via **Run workflow**.
+
+The workflow generates the Android native project from Expo SDK 58, builds a **standalone release-variant test APK**, verifies its Android signature and uploads `app-release.apk` as a 30-day GitHub Actions artifact. Open the completed workflow run, scroll to **Artifacts**, download `qwen-github-mobile-apk-<run number>`, unzip it and install the APK. This workflow does not require Render, Expo EAS credentials or a continuously running server.
+
+Optional Firebase notifications: add repository Actions secret `ANDROID_GOOGLE_SERVICES_JSON_B64` with the base64 encoding of the Android **client** `google-services.json`. If the secret is absent, the APK build runs without Firebase Cloud Messaging configuration; push notifications will not be available. Never put a Firebase **service-account private key** in the app or repository.
+
+The APK is a **test build** that uses the Android project's default debug signing and is not a production-signed store release. The current mobile chat still expects a FastAPI backend; migration to a phone-local Termux/Qwen agent is not yet implemented. A successful Android build alone does not mean those features work without a server.
