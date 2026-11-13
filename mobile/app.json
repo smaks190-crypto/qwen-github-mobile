@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Qwen GitHub Agent",
+    "slug": "qwen-github-agent",
+    "scheme": "qwendev",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.example.qwengithubagent",
+      "googleServicesFile": "./google-services.json",
+      "permissions": ["android.permission.POST_NOTIFICATIONS"]
+    },
+    "plugins": ["expo-notifications", "expo-secure-store"]
+  }
+}
