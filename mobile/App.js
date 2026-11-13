@@ -3,6 +3,8 @@ import { Alert, ActivityIndicator, FlatList, SafeAreaView, ScrollView,
   StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
+import CreatePRModal from './src/components/CreatePRModal';
+import { readPreparedPullRequest } from './src/utils/pullRequest';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -33,6 +35,14 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState('');
   const chatRef = useRef([]);
+  const shownPrTasks = useRef(new Set());
+  const [prPanelOpen, setPrPanelOpen] = useState(false);
+  const [prPrepared, setPrPrepared] = useState(null);
+
+  const openPrPanel = (prepared = null) => {
+    setPrPrepared(prepared);
+    setPrPanelOpen(true);
+  };
 
   useEffect(() => {
     (async () => {
@@ -62,7 +72,17 @@ export default function App() {
     try {
       const [r, t] = await Promise.all([api('/repos'), api('/tasks')]);
       setRepos(r.repos || []); setSelectedRepo(prev => prev || r.repos?.[0] || '');
-      setTasks(t.tasks || []); setError('');
+      const nextTasks = t.tasks || [];
+      setTasks(nextTasks); setError('');
+      // Automatically open the PR creation panel only once for a pushed code branch.
+      for (const item of nextTasks) {
+        const candidate = readPreparedPullRequest(item);
+        if (candidate && !shownPrTasks.current.has(candidate.id)) {
+          shownPrTasks.current.add(candidate.id);
+          openPrPanel(candidate);
+          break;
+        }
+      }
     } catch(e) { setError(String(e.message || e)); }
   }, [api,url,token,settings]);
 
@@ -150,7 +170,10 @@ export default function App() {
     <View style={s.header}>
       <View><Text style={s.heading}>Qwen <Text style={{color:COLORS.purple}}>GitHub</Text></Text>
         <Text style={s.muted}>AI-разработка с телефона</Text></View>
-      <Btn label="⚙" secondary onPress={() => setSettings(true)} />
+      <View style={{flexDirection:'row',gap:8,alignItems:'center'}}>
+        <Btn label="＋ PR" onPress={() => openPrPanel()} />
+        <Btn label="⚙" secondary onPress={() => setSettings(true)} />
+      </View>
     </View>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.repoBar} contentContainerStyle={{padding:9,gap:8}}>
       {repos.map(r => <TouchableOpacity key={r} style={[s.repoPill,selectedRepo===r && s.activePill]} onPress={() => setSelectedRepo(r)}>
@@ -179,7 +202,9 @@ export default function App() {
       <Text style={s.message}>{item.status}</Text>
       <Text style={s.small}>{item.result || JSON.stringify(JSON.parse(item.args))}</Text>
       {item.status === 'pending_confirmation' && <Btn label="Подтвердить" onPress={() => confirm(item.id)} />}
+      {!!readPreparedPullRequest(item) && <Btn label="Создать PR" onPress={() => openPrPanel(readPreparedPullRequest(item))} />}
     </View>} />}
+    <CreatePRModal visible={prPanelOpen} prepared={prPrepared} selectedRepo={selectedRepo} onClose={() => setPrPanelOpen(false)} />
   </SafeAreaView>;
 }
 

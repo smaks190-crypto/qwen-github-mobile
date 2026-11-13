@@ -85,10 +85,14 @@ async def perform(task):
                          'user.email=qwen-agent@users.noreply.github.com',
                          'commit','-m',f'AI: {description[:70]}',cwd=work,env=env)
             await gh.git('push','--set-upstream','origin',branch,cwd=work,env=env)
-            pr = await gh.open_pr(repo, f'AI: {description[:180]}',branch,
-                '## Task\n' + description + '\n\n## Qwen Code summary\n' + explanation[:8000]
-                + '\n\n**Draft PR. CI status must be checked before merging.**', base)
-            return f"Draft PR #{pr['number']} created: {pr['url']}. CI is not yet verified."
+            # Push the branch, then let the mobile user open GitHub's Create PR panel.
+            # Do not publish a pull request from the worker without final review.
+            return json.dumps({
+                'type': 'pr_ready', 'repo': repo, 'head': branch, 'base': base,
+                'title': f'AI: {description[:180]}',
+                'body': '## Task\n' + description + '\n\n## Qwen Code summary\n'
+                        + explanation[:2500] + '\n\nCI must be checked before merging.'
+            }, ensure_ascii=False)
     raise ValueError('Unrecognized task kind')
 
 async def run_task(task_id):
