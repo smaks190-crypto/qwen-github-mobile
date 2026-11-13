@@ -95,7 +95,7 @@ export default function App() {
     if (!url.trim().startsWith('https://') || token.trim().length < 20) {
       Alert.alert('Проверь настройки','Нужен HTTPS URL и длинный ключ приложения'); return;
     }
-    await SecureStore.setItemAsync('server_url',url.trim().replace(/\$/,''));
+    await SecureStore.setItemAsync('server_url',url.trim().replace(/\/$/,''));
     await SecureStore.setItemAsync('app_token',token.trim());
     setSettings(false);
   };
