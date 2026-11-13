@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.*
+!*.env.example
+firebase-service-account.json
+backend/data/
+mobile/node_modules/
+mobile/.expo/
+mobile/google-services.json
+mobile/android/
+mobile/ios/
