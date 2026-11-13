@@ -1,27 +1,31 @@
-name: Backend checks
+name: Project checks
 on:
   push:
   pull_request:
+
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt
-      - run: python -m compileall -q app
-      - run: python -m pytest -q
-
-  mobile-pr-panel:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test mobile/src/utils/pullRequest.test.mjs
+      - name: Legacy backend tests
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          python -m compileall -q app
+          python -m pytest -q
+      - name: Termux runner safety tests
+        run: |
+          python -m py_compile termux/agent.py
+          python -m unittest discover -s termux -p 'test_*.py' -v
+      - name: Mobile request and PR panel tests
+        run: node --test mobile/src/utils/*.test.mjs

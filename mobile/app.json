@@ -3,13 +3,13 @@
     "name": "Qwen GitHub Agent",
     "slug": "qwen-github-agent",
     "scheme": "qwendev",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.example.qwengithubagent",
-      "permissions": ["android.permission.POST_NOTIFICATIONS"]
+      "permissions": ["com.termux.permission.RUN_COMMAND", "android.permission.INTERNET"]
     },
-    "plugins": ["expo-notifications", "expo-secure-store"]
+    "plugins": ["expo-secure-store"]
   }
 }

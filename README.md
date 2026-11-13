@@ -1,111 +1,62 @@
-# Qwen GitHub Mobile — prototype 0.1.0
+# Qwen GitHub Mobile — Android + Termux (v0.2)
 
-A mobile chat for GitHub with **the actual Qwen Code agent** (not regex-parsed code blocks).
+**No Render, VPS or FastAPI server is required for the Android client.** The phone runs the Qwen Code CLI inside Termux on demand. The installed Android app shows a chat and a settings panel for **two credentials**: a GitHub fine-grained token and the API key of a chosen AI model provider. The agent returns its final response into the chat. Termux is launched with `RUN_COMMAND_BACKGROUND=true` (no terminal window).
 
-## What is implemented
-- Expo SDK 58 Android React Native UI: chat, repository selection, action previews, explicit confirmation, task status.
-- FastAPI backend with a single-user bearer token (store it in Android SecureStore), repo allowlist, server-only GitHub & Qwen keys.
-- Qwen API tool-routing for chat. Read-only: repository info, PR list, local full-text repository retrieval. Changes: create issue, review PR, draft code PR, index repository. **All operations that create a task require confirmation.**
-- Real Qwen Code CLI in a Docker worker to read/modify cloned repositories. The worker never receives the GitHub token; host performs git operations.
-- Webhook HMAC signature verification, delivery idempotency, CI/PR/issue/push notification routing to only the registered devices subscribed to that repository.
-- SQLite task records and SQLite FTS5 chunk-based RAG; no heavy model installation for embeddings.
-- Qwen Code pushes an isolated branch, but does not create a PR automatically. A **Create PR** panel opens in Android after successful completion. The panel edits the title, description, base/head and opens GitHub's official PR form, where you choose standard or Draft PR and confirm publication.
+> The model can be remote (QwenCloud, OpenRouter, etc.). **No remote app server** is used, but AI APIs can have usage limits or charges. OpenRouter free-tier availability depends on the model/provider. A successful APK build is not proof of an end-to-end run on your device.
 
-## Important limitations
-- **Prototype, not production-ready.** Single-server process, single-owner shared access secret, SQLite in-process task queue; no proper OAuth/GitHub App, multi-tenant tenancy or scalable workers. For deployment beyond your own use, replace with GitHub App and user OAuth, proper durable queue, Docker isolation hardening + egress controls, security audit, rate limits and retention controls.
-- Code tasks require approval before the agent edits files and pushes a branch. Publishing a PR requires a second, explicit action in GitHub. Never run it against repositories you do not control.
-- Qwen Code uses `--safe-mode --approval-mode auto-edit`, not dangerous YOLO. It may refuse operations it cannot do without an approved shell command. CI is **not** run synchronously in the worker; it must be verified in GitHub Actions.
-- The review task posts a general issue comment, not line-level GitHub Reviews. It is AI analysis, not a guarantee that all bugs are found.
-- RAG is local FTS5 lexical retrieval, not vector semantic embeddings. Index needs to be updated manually after repository changes.
-- Android native FCM requires a Firebase project, `google-services.json`, a build with native code (development build / APK), and backend service-account credentials. **Expo Go alone is not sufficient.** iOS APNs delivery not implemented.
-- No actual Qwen API or GitHub credentials were used to run end-to-end integration tests here.
+## Features
 
-## Setup: backend
+- **Main screen:** conversation only, with a small settings button; no backend URL or APP_API_TOKEN.
+- **Settings:** `GitHub PAT`, `AI API key`, provider, OpenAI-compatible HTTPS endpoint, model ID and selected repository. App settings including tokens use Android-backed Expo SecureStore; they are never committed to GitHub.
+- **Chat:** the native `TermuxBridge` calls Termux's documented `RUN_COMMAND` intent, passing one JSON request on stdin and receiving a one-shot result by `PendingIntent`. No localhost HTTP service, port or daemon. Raw shell output is not shown in the UI.
+- **Code changes:** confirm a detected edit request → Qwen Code edits in a local clone and creates a local Git commit → confirm **Send branch** → GitHub compare/Create PR panel opens → you explicitly create the PR on GitHub. No automatic merge and no implicit GitHub push.
+- **App background:** best-effort cancel when leaving the foreground; Qwen tasks have a 15-minute limit. Force-killing the Android process can bypass lifecycle events. Running a GitHub Actions build is independent of the app and continues after closing it.
 
-Prerequisites: Python 3.11+, Git, Docker Engine, a non-root Docker runtime account, a GitHub token scoped to your repositories, and valid QwenCloud credentials.
+## First-time setup on your Android phone
 
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-# edit .env: APP_API_TOKEN, GITHUB_TOKEN, ALLOWED_REPOS,
-# GITHUB_WEBHOOK_SECRET, QWENCLOUD_API_KEY, MODEL/URL.
-cd ..
-docker build -t qwen-github-worker:local worker
-cd backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+1. Install **Termux** from [F-Droid](https://f-droid.org/en/packages/com.termux/) or the [official GitHub releases](https://github.com/termux/termux-app/releases). Termux `>=0.109` is required for stdin and result callbacks. Launch Termux once and let it initialize.
+2. In the Termux terminal run:
 
-For testing locally with HTTPS use a reverse proxy or temporary trusted HTTPS tunnel. Do not expose FastAPI directly to the public internet without proper TLS/auth/rate-limits. `APP_API_TOKEN` is a separate application access secret; it is **not** your GitHub token.
+   ```bash
+   pkg update -y
+   pkg install -y git
+   git clone https://github.com/smaks190-crypto/qwen-github-mobile.git ~/qwen-github-mobile
+   bash ~/qwen-github-mobile/termux/setup.sh
+   ```
 
-Test access:
-```bash
-curl -H "Authorization: Bearer YOUR_APP_API_TOKEN" https://YOUR_DOMAIN/repos
-```
+   The setup script installs Python, Git, Node.js and `@qwen-code/qwen-code`, copies the agent runner into `~/.local/bin/`, and enables `allow-external-apps=true` in `~/.termux/termux.properties`. You can inspect the setup script before running it. This is a one-time setup, **not a background service**.
+3. Open **Android Settings → Apps → Qwen GitHub Agent → Permissions → Additional permissions**, enable **Run commands in Termux environment**. This special permission is mandatory; the APK does not bypass it. Some Android builds show this permission under a slightly different heading.
+4. Install the APK from the [Android APK workflow](https://github.com/smaks190-crypto/qwen-github-mobile/actions/workflows/android-apk.yml) on GitHub. Select the latest **successful** run, then download its `qwen-github-mobile-apk-*` artifact ZIP and install `app-release.apk`.
+5. On first launch, tap **Settings**, fill in **GitHub token** and **AI API key**, select provider, model and repository, then **Save**. Do not paste these tokens into chat messages.
 
-Webhooks: repository > Settings > Webhooks > Add; URL `https://YOUR_DOMAIN/webhook/github`, content type `application/json`, secret `GITHUB_WEBHOOK_SECRET`; events `issues`, `pull_request`, `push`, `check_run`, `check_suite`, `workflow_run` as needed. Webhook endpoint is public but HMAC-verified.
+The GitHub token should be a **fine-grained PAT** scoped to only repositories you want Qwen to work on, with **Contents: read and write** and **Pull requests: read and write** (optional: Issues read/write). To create it: https://github.com/settings/personal-access-tokens/new . QwenCloud API keys: https://home.qwencloud.com/api-keys . QwenCloud and other providers can charge per API usage. The app does not silently select a paid model.
 
-## Create PR panel
+## How to use
 
-After a completed code task has pushed its branch, the Android UI automatically opens **Создать PR** with the repository, source and target branches, title, and description. Tap **Продолжить в GitHub** to view the official GitHub form and review the diff; GitHub itself performs the final publish. You can also open the panel with **＋ PR** at any time. This step uses GitHub HTTPS links and does not need a separate PR API server or token in the phone app.
+- `Покажи, как устроен этот проект` — read-only mode.
+- `Исправь ошибку в обработке событий` — the app asks to approve edits before Qwen starts. The clone stays on the phone. The Qwen subprocess never receives the GitHub token; only the Git host wrapper can push.
+- After Qwen reports prepared changes, tap **Отправить ветку и создать PR**. Confirm GitHub push, then review title, branches and description in the PR panel. GitHub itself performs the final PR creation.
 
-**Scope:** The current prototype still requires the FastAPI backend to execute Qwen Code tasks and show tasks/chat. The planned Termux-only runtime replacing that backend is not implemented by this PR.
+**Runtime and security:** Android invokes an explicit `com.termux.app.RunCommandService`, specifying a fixed installed Python runner path (no arbitrary shell commands from the UI). Arguments do not contain credentials. The request body goes in Termux's stdin intent extra; Termux necessarily receives both tokens to execute work. On-device app/Termux security and the provider's policy still matter. Agent execution uses `--safe-mode --approval-mode auto-edit`; the Python wrapper rejects changed secret files and GitHub workflow files before committing. Test with a disposable repository before allowing write access to important ones.
 
-## Setup: Android
+## Development and CI
 
-Prerequisites: Node.js 22.13+, Android build environment or EAS build.
+The root still contains the **legacy `backend/` and `worker/` prototype** as reference; neither is invoked by the Android client. Android builds on every push/merge to `main` via `.github/workflows/android-apk.yml`. Other checks include Python syntax/unit tests and Node tests.
 
 ```bash
-cd mobile
-npm install
-npx expo install --fix
-npx expo-doctor
+python -m unittest discover -s termux -p 'test_*.py' -v
+python -m py_compile termux/agent.py
+cd mobile && node --test src/utils/*.test.mjs
 ```
 
-Create a Firebase Android app with package name `com.example.qwengithubagent`, download its **client** file `google-services.json` into `mobile/`. Configure backend `FIREBASE_CREDENTIALS_PATH` to the server's **private** Firebase service-account JSON (never add that private file to version control or APK). Then build a native development APK:
+The Android bridge is a local Expo Module at `mobile/modules/termux-bridge`. Its Kotlin service returns Termux's one-shot callback back to the JS promise. This requires a **native APK**; Expo Go does not have this module.
 
-```bash
-npx expo run:android
-# Or: use EAS development build with your own Expo project/credentials.
-```
+## Limitations
 
-On first launch supply your **HTTPS backend URL** and **APP_API_TOKEN**. The UI stores the access secret using Expo SecureStore. Then select an allowlisted repo and chat: `Покажи открытые PR`, `Проверь PR #8`, `Добавь обработку ошибок и создай PR`, `Индексируй репозиторий`.
+- Requires official Termux to be installed and configured separately. **Native integration has not yet been validated on a physical phone**; problems may appear with specific Android/Termux versions and need logs/diagnostics.
+- Qwen Code must install and run on Termux's Node environment. Some Node/native dependencies may not support all Android variants.
+- One task at a time. No long-running daemon, FCM push notifications, or background monitoring.
+- Currently the app's command classifier recognizes common edit imperative verbs; ambiguous commands default to read-only. In edit mode, the human must approve changes and later approve a push.
+- GitHub Actions builds the APK in the cloud, independently of where the Qwen agent runs.
 
-## Tests and validation
-
-```bash
-cd backend
-python -m pytest -q
-python -m compileall -q app
-cd ../mobile && node --test src/utils/pullRequest.test.mjs
-```
-
-To run end-to-end tests, configure a disposable private GitHub repository, valid Qwen API key, an installed Docker daemon and Firebase test app. Confirm an issue, a review, a code task, and verify their effects on GitHub; check the Android build and webhook delivery history separately.
-
-## Suggested production improvements
-1. Replace single-owner APP_API_TOKEN with GitHub user OAuth PKCE and GitHub App installation tokens (short-lived and per repository).
-2. Move queue to Redis/RQ or PostgreSQL durable workers, with cancellable jobs, worker concurrency limits and audit logs.
-3. Limit egress from Qwen sandbox to the model endpoint and enforce prompt-injection/secret-scanning policies; require explicit human approval for sensitive changes.
-4. Stream task logs via SSE/WebSocket, implement line-level reviews, apply CI workflow profiles, and add branch protection and manual merge.
-5. Introduce SHA-aware incremental embedding RAG if necessary.
-
-## Source references
-- Qwen Code repo: https://github.com/QwenLM/qwen-code
-- Qwen Code headless: https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/headless.md
-- Qwen authentication: https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/auth.md
-- Expo native notifications: https://docs.expo.dev/push-notifications/sending-notifications-custom/
-- GitHub webhook security: https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
-- GitHub official Create PR form URL: https://docs.github.com/en/pull-requests/reference/using-query-parameters-to-create-a-pull-request
-
-
-## Automatic Android APK on changes to main
-
-GitHub Actions workflow [Android APK](https://github.com/smaks190-crypto/qwen-github-mobile/actions/workflows/android-apk.yml) runs on **every push to `main`**, including merged PRs. It can also be started manually via **Run workflow**.
-
-The workflow generates the Android native project from Expo SDK 58, builds a **standalone release-variant test APK**, verifies its Android signature and uploads `app-release.apk` as a 30-day GitHub Actions artifact. Open the completed workflow run, scroll to **Artifacts**, download `qwen-github-mobile-apk-<run number>`, unzip it and install the APK. This workflow does not require Render, Expo EAS credentials or a continuously running server.
-
-Optional Firebase notifications: add repository Actions secret `ANDROID_GOOGLE_SERVICES_JSON_B64` with the base64 encoding of the Android **client** `google-services.json`. If the secret is absent, the APK build runs without Firebase Cloud Messaging configuration; push notifications will not be available. Never put a Firebase **service-account private key** in the app or repository.
-
-The APK is a **test build** that uses the Android project's default debug signing and is not a production-signed store release. The current mobile chat still expects a FastAPI backend; migration to a phone-local Termux/Qwen agent is not yet implemented. A successful Android build alone does not mean those features work without a server.
+Sources: [Termux RUN_COMMAND Intent](https://github.com/termux/termux-app/wiki/RUN_COMMAND-Intent), [Qwen Code headless](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/), [Qwen provider setup](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/), [Expo local modules](https://docs.expo.dev/modules/get-started/).

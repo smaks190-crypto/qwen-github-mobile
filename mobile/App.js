@@ -1,238 +1,223 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, ActivityIndicator, FlatList, SafeAreaView, ScrollView,
-  StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, FlatList, KeyboardAvoidingView,
+  Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput,
+  TouchableOpacity, View } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import * as Notifications from 'expo-notifications';
+import TermuxBridge from './modules/termux-bridge';
 import CreatePRModal from './src/components/CreatePRModal';
-import { readPreparedPullRequest } from './src/utils/pullRequest';
+import { PROVIDERS, assertSettings, isEditRequest, newJobId, parseAgentResponse } from './src/utils/agentRequest';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false,
-  }),
-});
+const C = { bg:'#0d0d14', panel:'#1b192b', border:'#342e4b', ink:'#f6f2ff', muted:'#aaa4c1', accent:'#9866ff', green:'#56d6a1', red:'#ff7e97' };
+const DEFAULTS = { repo:'smaks190-crypto/qwen-github-mobile', provider:'qwencloud',
+  baseUrl:PROVIDERS.qwencloud.baseUrl, model:PROVIDERS.qwencloud.model, githubToken:'', aiKey:'' };
+const STORAGE = 'qwen_github_local_settings_v2';
 
-const COLORS = { bg: '#0d0d14', panel: '#1a1928', border: '#313047', ink: '#f5f1ff',
-  muted: '#a8a4bf', purple: '#9569ff', green: '#61d6a1', danger: '#ff7b90' };
-
-function Btn({ label, onPress, disabled, secondary, danger }) {
-  return <TouchableOpacity disabled={disabled} onPress={onPress}
-    style={[s.btn, secondary && s.secondary, danger && s.danger, disabled && s.disabled]}>
-    <Text style={s.btnText}>{label}</Text>
+function Action({label,onPress,disabled,subtle}) {
+  return <TouchableOpacity accessibilityRole="button" onPress={onPress} disabled={disabled}
+    style={[styles.action,subtle&&styles.subtle,disabled&&{opacity:.45}]}>
+    <Text style={styles.actionText}>{label}</Text>
   </TouchableOpacity>;
 }
 
-export default function App() {
-  const [url, setUrl] = useState('');
-  const [token, setToken] = useState('');
-  const [settings, setSettings] = useState(true);
-  const [tab, setTab] = useState('chat');
-  const [repos, setRepos] = useState([]);
-  const [selectedRepo, setSelectedRepo] = useState('');
-  const [messages, setMessages] = useState([{id:'welcome',role:'assistant',text:'Привет! Выбери репозиторий. Я могу читать PR, готовить Issues и поручать Qwen Code изменения в коде.'}]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [tasks, setTasks] = useState([]);
-  const [error, setError] = useState('');
-  const chatRef = useRef([]);
-  const shownPrTasks = useRef(new Set());
-  const [prPanelOpen, setPrPanelOpen] = useState(false);
-  const [prPrepared, setPrPrepared] = useState(null);
+function SettingField({label,value,onChangeText,secret,placeholder,multiline}) {
+  return <View style={{gap:8}}>
+    <Text style={styles.label}>{label}</Text>
+    <TextInput style={[styles.field,multiline&&{height:85}]} value={value} onChangeText={onChangeText}
+      autoCapitalize="none" autoCorrect={false} secureTextEntry={!!secret}
+      placeholder={placeholder} placeholderTextColor={C.muted} multiline={multiline}/>
+  </View>;
+}
 
-  const openPrPanel = (prepared = null) => {
-    setPrPrepared(prepared);
-    setPrPanelOpen(true);
-  };
+export default function App() {
+  const [settings,setSettings] = useState(DEFAULTS);
+  const [draft,setDraft] = useState(DEFAULTS);
+  const [settingsOpen,setSettingsOpen] = useState(false);
+  const [ready,setReady] = useState(false);
+  const [input,setInput] = useState('');
+  const [busy,setBusy] = useState(false);
+  const [messages,setMessages] = useState([{id:'welcome',role:'assistant',text:'Привет! Я Qwen GitHub Agent. Напиши задачу: прочитать код, проверить PR или исправить ошибку. Работаю через Termux на твоём телефоне, без Render.'}]);
+  const [prepared,setPrepared] = useState(null);
+  const [prOpen,setPrOpen] = useState(false);
+  const activeJob = useRef(null);
+  const mounted = useRef(true);
+  const list = useRef(null);
 
   useEffect(() => {
+    mounted.current = true;
     (async () => {
-      const savedUrl = await SecureStore.getItemAsync('server_url');
-      const savedToken = await SecureStore.getItemAsync('app_token');
-      if (savedUrl && savedToken) {
-        setUrl(savedUrl); setToken(savedToken); setSettings(false);
-      }
-    })().catch(() => setError('Не удалось прочитать настройки'));
+      try {
+        const saved = await SecureStore.getItemAsync(STORAGE);
+        if (saved) {
+          const updated = {...DEFAULTS,...JSON.parse(saved)};
+          setSettings(updated); setDraft(updated);
+          setSettingsOpen(!updated.githubToken || !updated.aiKey);
+        } else setSettingsOpen(true);
+      } catch (_) {setSettingsOpen(true);}
+      finally {setReady(true);}
+    })();
+    return () => {mounted.current = false;};
   }, []);
 
-  const api = useCallback(async (route, method='GET', data) => {
-    const base = url.trim().replace(/\/$/, '');
-    if (!base.startsWith('https://') && !base.startsWith('http://localhost'))
-      throw new Error('Нужен HTTPS-адрес сервера');
-    const response = await fetch(`${base}${route}`, {
-      method, headers: {Authorization:`Bearer ${token}`, 'Content-Type':'application/json'},
-      ...(data === undefined ? {} : {body:JSON.stringify(data)}),
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
-    return result;
-  }, [url,token]);
-
-  const refresh = useCallback(async () => {
-    if (!url || !token || settings) return;
-    try {
-      const [r, t] = await Promise.all([api('/repos'), api('/tasks')]);
-      setRepos(r.repos || []); setSelectedRepo(prev => prev || r.repos?.[0] || '');
-      const nextTasks = t.tasks || [];
-      setTasks(nextTasks); setError('');
-      // Automatically open the PR creation panel only once for a pushed code branch.
-      for (const item of nextTasks) {
-        const candidate = readPreparedPullRequest(item);
-        if (candidate && !shownPrTasks.current.has(candidate.id)) {
-          shownPrTasks.current.add(candidate.id);
-          openPrPanel(candidate);
-          break;
-        }
-      }
-    } catch(e) { setError(String(e.message || e)); }
-  }, [api,url,token,settings]);
-
   useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, 15000);
-    return () => clearInterval(timer);
-  }, [refresh]);
-
-  useEffect(() => {
-    if (settings || !selectedRepo || !token) return;
-    let subscription;
-    (async () => {
-      const permission = await Notifications.requestPermissionsAsync();
-      if (permission.status !== 'granted') return;
-      // Android native FCM token, NOT an Expo push-service token.
-      const push = await Notifications.getDevicePushTokenAsync();
-      if (typeof push.data === 'string')
-        await api('/devices','POST',{token:push.data,repos:[selectedRepo]});
-    })().catch(e => console.log('Push registration not configured:',String(e)));
-    subscription = Notifications.addPushTokenListener(async push => {
-      if (typeof push.data === 'string') {
-        try { await api('/devices','POST',{token:push.data,repos:[selectedRepo]}); } catch(e) { console.log(e); }
+    const listener = AppState.addEventListener('change', state => {
+      if (state !== 'active' && activeJob.current) {
+        // Best-effort cancellation; force-killing an app may bypass lifecycle notifications.
+        TermuxBridge.cancel(activeJob.current).catch(() => {});
       }
     });
-    return () => subscription?.remove();
-  }, [api,selectedRepo,settings,token]);
+    return () => listener.remove();
+  }, []);
+
+  const assistant = useCallback((text,extra={}) => {
+    if (!mounted.current) return;
+    setMessages(items => [...items, {id:`a-${Date.now()}-${Math.random()}`,role:'assistant',text,...extra}]);
+  }, []);
 
   const save = async () => {
-    if (!url.trim().startsWith('https://') || token.trim().length < 20) {
-      Alert.alert('Проверь настройки','Нужен HTTPS URL и длинный ключ приложения'); return;
-    }
-    await SecureStore.setItemAsync('server_url',url.trim().replace(/\/$/,''));
-    await SecureStore.setItemAsync('app_token',token.trim());
-    setSettings(false);
+    try {
+      assertSettings(draft);
+      await SecureStore.setItemAsync(STORAGE, JSON.stringify(draft), {
+        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      });
+      setSettings(draft); setSettingsOpen(false);
+    } catch(error) { Alert.alert('Проверь настройки',String(error.message||error)); }
+  };
+
+  const requestAgent = async payload => {
+    const text = await TermuxBridge.run(JSON.stringify(payload));
+    return parseAgentResponse(text);
+  };
+
+  const runTask = async (prompt,mode) => {
+    const jobId = newJobId();
+    activeJob.current = jobId;
+    setBusy(true);
+    try {
+      const result = await requestAgent({action:'task',mode,job_id:jobId,prompt,
+        repo:settings.repo,github_token:settings.githubToken,ai_key:settings.aiKey,
+        provider:settings.provider,base_url:settings.baseUrl,model:settings.model});
+      assistant(result.message || 'Готово.',result.prepared ? {
+        prepared:{jobId,repo:settings.repo,branch:result.branch,base:result.base,files:result.files},
+      }:{});
+    } catch(e) {assistant('Не удалось выполнить задачу: '+String(e.message||e));}
+    finally {activeJob.current=null; if(mounted.current)setBusy(false);}
   };
 
   const send = async () => {
-    const text = input.trim();
-    if (!text || loading) return;
-    setInput(''); setLoading(true);
-    setMessages(prev => [...prev,{id:`u-${Date.now()}`,role:'user',text}]);
-    const prefix = selectedRepo ? `Текущий репозиторий: ${selectedRepo}. ` : '';
-    try {
-      const result = await api('/chat','POST',{message:prefix+text,history:chatRef.current.slice(-12)});
-      chatRef.current = [...chatRef.current,{role:'user',content:prefix+text},{role:'assistant',content:result.reply}].slice(-12);
-      setMessages(prev => [...prev,{id:`a-${Date.now()}`,role:'assistant',text:result.reply,actions:result.actions || []}]);
-      refresh();
-    } catch(e) { setMessages(prev => [...prev,{id:`e-${Date.now()}`,role:'error',text:String(e.message || e)}]); }
-    finally { setLoading(false); }
+    const prompt=input.trim();
+    if(!prompt||busy) return;
+    try {assertSettings(settings);} catch(error){setDraft(settings);setSettingsOpen(true);Alert.alert('Нужны два ключа',error.message);return;}
+    if (!TermuxBridge.isTermuxInstalled()) {
+      Alert.alert('Нужен Termux','Установи Termux (F-Droid/GitHub) и выполни первоначальную настройку из README.'); return;
+    }
+    setInput('');
+    setMessages(items=>[...items,{id:`u-${Date.now()}`,role:'user',text:prompt}]);
+    if(isEditRequest(prompt)) {
+      Alert.alert('Изменить код?', 'Qwen подготовит изменения в отдельной локальной ветке. Отправить её в GitHub можно будет только после твоего подтверждения.',[
+        {text:'Отмена',style:'cancel',onPress:()=>assistant('Редактирование отменено.')},
+        {text:'Разрешить',onPress:()=>runTask(prompt,'edit')},
+      ]);
+    } else await runTask(prompt,'chat');
   };
 
-  const confirm = (id) => {
-    Alert.alert('Подтвердить действие?', 'Запуск может изменить репозиторий или опубликовать комментарий в GitHub.', [
+  const pushPrepared = info => {
+    Alert.alert('Отправить ветку в GitHub?',`${info.repo}\n${info.branch}\n\nPR не будет создан без твоего отдельного подтверждения.`,[
       {text:'Отмена',style:'cancel'},
-      {text:'Подтвердить',onPress: async () => {
-        try { await api(`/tasks/${id}/confirm`,'POST'); refresh(); Alert.alert('Поставлено в очередь','Результат появится в разделе «Задачи».'); }
-        catch(e) { Alert.alert('Ошибка',String(e.message || e)); }
-      }},
+      {text:'Отправить',onPress:async()=>{
+        activeJob.current=info.jobId;setBusy(true);
+        try {
+          const result=await requestAgent({action:'push',job_id:info.jobId,repo:info.repo,
+            github_token:settings.githubToken});
+          const next={repo:info.repo,head:result.branch,base:result.base,title:result.title,body:result.description};
+          setPrepared(next);setPrOpen(true);
+          assistant(result.message);
+        }catch(e){assistant('Не удалось отправить ветку: '+String(e.message||e));}
+        finally{activeJob.current=null;if(mounted.current)setBusy(false);}
+      }}
     ]);
   };
 
-  const renderMessage = ({item}) => <View style={[s.bubble, item.role === 'user' ? s.userBubble : s.aiBubble]}>
-    <Text style={s.message}>{item.text}</Text>
-    {(item.actions || []).map((a,i) => <View key={i} style={s.action}>
-      {a.type === 'confirmation_required' ? <>
-        <Text style={s.label}>ПОДТВЕРЖДЕНИЕ · {a.kind} · {a.repo}</Text>
-        <Text style={s.small}>{JSON.stringify(a.details,null,2)}</Text>
-        <Btn label="Подтвердить действие" onPress={() => confirm(a.task_id)} />
-      </> : <Text style={s.small}>{JSON.stringify(a.result || a.message,null,2)}</Text>}
-    </View>)}
+  const renderMessage = ({item}) => <View style={[styles.bubble,item.role==='user'?styles.user:styles.bot]}>
+    <Text selectable style={styles.message}>{item.text}</Text>
+    {item.prepared&&<View style={styles.preview}>
+      <Text style={styles.secondary}>Подготовлено файлов: {item.prepared.files?.length||0}</Text>
+      <Text style={styles.secondary}>Ветка: {item.prepared.branch}</Text>
+      <Action label="Отправить ветку и создать PR" disabled={busy} onPress={()=>pushPrepared(item.prepared)}/>
+    </View>}
   </View>;
 
-  if (settings) return <SafeAreaView style={s.safe}><ScrollView contentContainerStyle={s.settings}>
-    <Text style={s.heading}>Qwen GitHub Agent</Text>
-    <Text style={s.muted}>Подключение к твоему серверу. GitHub и Qwen API ключи остаются на бэкенде.</Text>
-    <Text style={s.label}>HTTPS АДРЕС БЭКЕНДА</Text>
-    <TextInput style={s.input} value={url} onChangeText={setUrl} placeholder="https://your-backend.onrender.com" placeholderTextColor={COLORS.muted} autoCapitalize="none" />
-    <Text style={s.label}>КЛЮЧ ДОСТУПА К ПРИЛОЖЕНИЮ</Text>
-    <TextInput style={s.input} value={token} onChangeText={setToken} secureTextEntry placeholder="APP_API_TOKEN" placeholderTextColor={COLORS.muted} autoCapitalize="none" />
-    <Btn label="Сохранить и подключиться" onPress={() => save().catch(e => Alert.alert('Ошибка',String(e)))} />
-  </ScrollView></SafeAreaView>;
-
-  return <SafeAreaView style={s.safe}>
-    <View style={s.header}>
-      <View><Text style={s.heading}>Qwen <Text style={{color:COLORS.purple}}>GitHub</Text></Text>
-        <Text style={s.muted}>AI-разработка с телефона</Text></View>
-      <View style={{flexDirection:'row',gap:8,alignItems:'center'}}>
-        <Btn label="＋ PR" onPress={() => openPrPanel()} />
-        <Btn label="⚙" secondary onPress={() => setSettings(true)} />
-      </View>
+  if(!ready)return <SafeAreaView style={styles.safe}><ActivityIndicator style={{marginTop:100}} color={C.accent}/></SafeAreaView>;
+  return <SafeAreaView style={styles.safe}>
+    <View style={styles.header}>
+      <View style={{flex:1}}><Text style={styles.title}>Qwen <Text style={{color:C.accent}}>GitHub</Text></Text>
+        <Text style={styles.secondary}>Локально через Termux · {settings.repo}</Text></View>
+      <Action label="⚙" subtle onPress={()=>{setDraft(settings);setSettingsOpen(true);}}/>
     </View>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.repoBar} contentContainerStyle={{padding:9,gap:8}}>
-      {repos.map(r => <TouchableOpacity key={r} style={[s.repoPill,selectedRepo===r && s.activePill]} onPress={() => setSelectedRepo(r)}>
-        <Text style={s.repoText}>{r}</Text>
-      </TouchableOpacity>)}
-    </ScrollView>
-    {!!error && <Text style={s.error}>{error}</Text>}
-    <View style={s.tabs}>
-      <Btn label="Чат" secondary={tab !== 'chat'} onPress={() => setTab('chat')} />
-      <Btn label={`Задачи (${tasks.length})`} secondary={tab !== 'tasks'} onPress={() => setTab('tasks')} />
-      <Btn label="Обновить" secondary onPress={refresh} />
-    </View>
-    {tab === 'chat' ? <>
-      <FlatList data={messages} renderItem={renderMessage} keyExtractor={m => m.id}
-        style={{flex:1}} contentContainerStyle={{padding:14,paddingBottom:22}} />
-      <View style={s.quick}>
-        {['Покажи PR', 'Проверь последний PR', 'Проиндексируй репозиторий'].map(t => <TouchableOpacity key={t} style={s.repoPill} onPress={() => setInput(t)}>
-          <Text style={s.small}>{t}</Text></TouchableOpacity>)}
+    <FlatList ref={list} data={messages} keyExtractor={m=>m.id} renderItem={renderMessage}
+      onContentSizeChange={()=>list.current?.scrollToEnd({animated:true})}
+      contentContainerStyle={styles.messages} keyboardShouldPersistTaps="handled" />
+    {busy&&<View style={styles.progress}><ActivityIndicator color={C.accent}/><Text style={styles.secondary}>Qwen работает в Termux. Результат появится здесь.</Text></View>}
+    <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
+      <View style={styles.composer}>
+        <TextInput style={styles.composeInput} placeholder="Напиши задачу..." placeholderTextColor={C.muted}
+          value={input} onChangeText={setInput} multiline editable={!busy} maxLength={5000}/>
+        <Action label="➤" onPress={send} disabled={busy||!input.trim()}/>
       </View>
-      <View style={s.composer}>
-        <TextInput style={[s.input,{flex:1,maxHeight:130}]} value={input} onChangeText={setInput} placeholder="Напиши задачу..." placeholderTextColor={COLORS.muted} multiline />
-        {loading ? <ActivityIndicator color={COLORS.purple} /> : <Btn label="➤" onPress={send} />}
-      </View>
-    </> : <FlatList style={{flex:1}} data={tasks} keyExtractor={item => item.id} contentContainerStyle={{padding:14}} renderItem={({item}) => <View style={s.task}>
-      <Text style={s.label}>{item.kind.toUpperCase()} · {item.repo}</Text>
-      <Text style={s.message}>{item.status}</Text>
-      <Text style={s.small}>{item.result || JSON.stringify(JSON.parse(item.args))}</Text>
-      {item.status === 'pending_confirmation' && <Btn label="Подтвердить" onPress={() => confirm(item.id)} />}
-      {!!readPreparedPullRequest(item) && <Btn label="Создать PR" onPress={() => openPrPanel(readPreparedPullRequest(item))} />}
-    </View>} />}
-    <CreatePRModal visible={prPanelOpen} prepared={prPrepared} selectedRepo={selectedRepo} onClose={() => setPrPanelOpen(false)} />
+    </KeyboardAvoidingView>
+    <CreatePRModal visible={prOpen} prepared={prepared} selectedRepo={settings.repo} onClose={()=>setPrOpen(false)}/>
+    <Modal animationType="slide" visible={settingsOpen} onRequestClose={()=>setSettingsOpen(false)}>
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.settingsTitle}><Text style={styles.title}>Настройки</Text>
+          <Action label="✕" subtle onPress={()=>setSettingsOpen(false)}/></View>
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.settings}>
+          <Text style={styles.secondary}>Render и сервер больше не нужны. Сохрани оба ключа на телефоне. Termux запускается в фоне только на время задачи.</Text>
+          <SettingField label="РЕПОЗИТОРИЙ GITHUB" value={draft.repo} onChangeText={repo=>setDraft(v=>({...v,repo}))} placeholder="owner/repo"/>
+          <SettingField label="GITHUB PERSONAL ACCESS TOKEN" secret value={draft.githubToken}
+            onChangeText={githubToken=>setDraft(v=>({...v,githubToken}))} placeholder="github_pat_..."/>
+          <Text style={styles.label}>AI-ПРОВАЙДЕР</Text>
+          <View style={styles.providerRow}>{Object.entries(PROVIDERS).map(([id,p])=><TouchableOpacity key={id}
+            onPress={()=>setDraft(v=>({...v,provider:id,baseUrl:p.baseUrl,model:p.model}))}
+            style={[styles.provider,draft.provider===id&&styles.providerActive]}>
+            <Text style={styles.message}>{p.name}</Text>
+          </TouchableOpacity>)}</View>
+          <SettingField label="AI API KEY" secret value={draft.aiKey}
+            onChangeText={aiKey=>setDraft(v=>({...v,aiKey}))} placeholder="Ключ выбранного AI-провайдера"/>
+          <SettingField label="AI API URL (HTTPS)" value={draft.baseUrl}
+            onChangeText={baseUrl=>setDraft(v=>({...v,baseUrl}))} placeholder="https://.../v1"/>
+          <SettingField label="МОДЕЛЬ" value={draft.model}
+            onChangeText={model=>setDraft(v=>({...v,model}))} placeholder="Название модели"/>
+          <View style={styles.notice}><Text style={styles.secondary}>Бесплатные модели могут иметь лимиты и меняться. Проверь условия выбранного провайдера. Ключи сохраняются через Android SecureStore и передаются только локальному Termux при выполнении задания.</Text></View>
+          <View style={styles.notice}><Text style={styles.secondary}>Перед первым использованием: установи Termux, Python, Git и Qwen Code, выполни setup.sh из репозитория. Разреши приложению запускать команды Termux через Android Settings → Apps → Qwen GitHub Agent → Permissions → Additional permissions.</Text></View>
+          <Action label="Сохранить ключи и вернуться в чат" onPress={save}/>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
   </SafeAreaView>;
 }
 
-const s = StyleSheet.create({
-  safe:{flex:1,backgroundColor:COLORS.bg},
-  header:{padding:16,flexDirection:'row',justifyContent:'space-between',alignItems:'center'},
-  heading:{fontSize:25,fontWeight:'800',color:COLORS.ink},
-  muted:{fontSize:12,color:COLORS.muted,marginTop:3},
-  settings:{padding:22,gap:14,justifyContent:'center',flexGrow:1},
-  label:{color:COLORS.purple,fontSize:11,fontWeight:'800',letterSpacing:.5,marginBottom:6},
-  input:{backgroundColor:COLORS.panel,borderColor:COLORS.border,borderWidth:1,color:COLORS.ink,padding:12,borderRadius:13,minHeight:46},
-  btn:{backgroundColor:COLORS.purple,paddingHorizontal:16,paddingVertical:11,borderRadius:12,alignItems:'center'},
-  secondary:{backgroundColor:COLORS.panel,borderColor:COLORS.border,borderWidth:1},
-  danger:{backgroundColor:COLORS.danger},disabled:{opacity:.5},
-  btnText:{color:'white',fontWeight:'700'},
-  repoBar:{maxHeight:60,flexGrow:0,borderTopWidth:1,borderBottomWidth:1,borderColor:COLORS.border},
-  repoPill:{borderRadius:30,backgroundColor:COLORS.panel,padding:10,borderColor:COLORS.border,borderWidth:1},
-  activePill:{backgroundColor:'#493474',borderColor:COLORS.purple},
-  repoText:{color:COLORS.ink,fontSize:12},
-  tabs:{flexDirection:'row',gap:8,padding:10},
-  bubble:{maxWidth:'94%',padding:14,borderRadius:16,marginVertical:6},
-  userBubble:{backgroundColor:'#44306e',alignSelf:'flex-end'},
-  aiBubble:{backgroundColor:COLORS.panel,alignSelf:'flex-start',borderWidth:1,borderColor:COLORS.border},
-  message:{color:COLORS.ink,fontSize:14,lineHeight:21},
-  small:{color:COLORS.muted,fontSize:12,lineHeight:18},
-  action:{marginTop:12,padding:8,borderTopWidth:1,borderColor:COLORS.border,gap:8},
-  quick:{flexDirection:'row',gap:7,paddingHorizontal:8,paddingVertical:8,flexWrap:'wrap'},
-  composer:{flexDirection:'row',padding:10,gap:10,alignItems:'flex-end',borderTopWidth:1,borderColor:COLORS.border},
-  task:{backgroundColor:COLORS.panel,borderWidth:1,borderColor:COLORS.border,borderRadius:15,padding:14,gap:7,marginVertical:6},
-  error:{color:COLORS.danger,paddingHorizontal:12},
+const styles=StyleSheet.create({
+  safe:{flex:1,backgroundColor:C.bg},
+  header:{flexDirection:'row',alignItems:'center',gap:10,padding:16,borderBottomWidth:1,borderColor:C.border},
+  title:{color:C.ink,fontSize:24,fontWeight:'800'},
+  secondary:{fontSize:12,color:C.muted,lineHeight:19},
+  messages:{padding:14,paddingBottom:25},
+  bubble:{maxWidth:'94%',borderRadius:16,padding:14,marginVertical:6},
+  user:{backgroundColor:'#42316c',alignSelf:'flex-end'},
+  bot:{backgroundColor:C.panel,alignSelf:'flex-start',borderWidth:1,borderColor:C.border},
+  message:{color:C.ink,fontSize:14,lineHeight:21},
+  preview:{borderTopWidth:1,borderColor:C.border,marginTop:12,paddingTop:10,gap:7},
+  action:{backgroundColor:C.accent,alignItems:'center',justifyContent:'center',paddingHorizontal:13,paddingVertical:12,borderRadius:13},
+  subtle:{backgroundColor:C.panel,borderWidth:1,borderColor:C.border},
+  actionText:{color:'white',fontWeight:'700',fontSize:13},
+  composer:{flexDirection:'row',alignItems:'flex-end',gap:8,padding:10,borderTopWidth:1,borderColor:C.border},
+  composeInput:{flex:1,maxHeight:150,minHeight:49,padding:13,color:C.ink,backgroundColor:C.panel,borderRadius:13,borderWidth:1,borderColor:C.border},
+  progress:{flexDirection:'row',alignItems:'center',gap:10,padding:10},
+  settingsTitle:{padding:18,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},
+  settings:{padding:20,paddingBottom:40,gap:18},
+  label:{color:C.accent,fontSize:12,fontWeight:'800'},
+  field:{backgroundColor:C.panel,borderRadius:12,padding:13,minHeight:49,color:C.ink,borderWidth:1,borderColor:C.border},
+  providerRow:{flexDirection:'row',flexWrap:'wrap',gap:8},
+  provider:{padding:10,borderWidth:1,borderColor:C.border,borderRadius:12,backgroundColor:C.panel},
+  providerActive:{borderColor:C.accent,backgroundColor:'#44316d'},
+  notice:{padding:14,backgroundColor:C.panel,borderRadius:12,borderWidth:1,borderColor:C.border},
 });
