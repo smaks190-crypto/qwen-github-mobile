@@ -8,8 +8,21 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.example.qwengithubagent",
-      "permissions": ["com.termux.permission.RUN_COMMAND", "android.permission.INTERNET"]
+      "permissions": [
+        "com.termux.permission.RUN_COMMAND",
+        "android.permission.INTERNET"
+      ]
     },
-    "plugins": ["expo-secure-store"]
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
+    ]
   }
 }
