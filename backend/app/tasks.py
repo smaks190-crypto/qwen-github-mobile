@@ -10,7 +10,7 @@ from .agent import qwen_code
 
 def safe_changed_path(path):
     pure = pathlib.PurePosixPath(path)
-    if pure.is_absolute() or '..' in pure.parts or not path or path.startswith('"'):
+    if pure.is_absolute() or '..' in pure.parts or not path or path.startswith('\"'):
         return False
     forbidden = {'id_rsa', 'id_ed25519', '.npmrc', '.pypirc', 'google-services.json'}
     for part in pure.parts:
