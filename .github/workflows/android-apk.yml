@@ -37,11 +37,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android API 37
-        run: sdkmanager "platforms;android-37" "build-tools;37.0.0"
+        run: |
+          # GitHub's Ubuntu image already includes Android SDK cmdline tools.
+          # Avoid setup-android@v3: it currently calls the removed "tools" package.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
 
       - name: Install mobile dependencies
         working-directory: mobile
