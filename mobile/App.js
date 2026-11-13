@@ -6,6 +6,7 @@ import * as SecureStore from 'expo-secure-store';
 import TermuxBridge from './modules/termux-bridge';
 import CreatePRModal from './src/components/CreatePRModal';
 import { PROVIDERS, assertSettings, isEditRequest, newJobId, parseAgentResponse } from './src/utils/agentRequest';
+import { ensureTermuxPermission } from './src/utils/termuxPermission';
 
 const C = { bg:'#0d0d14', panel:'#1b192b', border:'#342e4b', ink:'#f6f2ff', muted:'#aaa4c1', accent:'#9866ff', green:'#56d6a1', red:'#ff7e97' };
 const DEFAULTS = { repo:'smaks190-crypto/qwen-github-mobile', provider:'qwencloud',
@@ -109,6 +110,26 @@ export default function App() {
     try {assertSettings(settings);} catch(error){setDraft(settings);setSettingsOpen(true);Alert.alert('Нужны два ключа',error.message);return;}
     if (!TermuxBridge.isTermuxInstalled()) {
       Alert.alert('Нужен Termux','Установи Termux (F-Droid/GitHub) и выполни первоначальную настройку из README.'); return;
+    }
+    // Request Android permission before consuming the prompt or posting any chat message.
+    // Never try to bypass the user's denial; let them open Android's app settings.
+    try {
+      const permissionGranted = await ensureTermuxPermission(TermuxBridge);
+      if (!permissionGranted) {
+        Alert.alert('Доступ к Termux не разрешён',
+          'Разреши запуск команд в Termux, чтобы Qwen мог работать локально. Задача осталась в поле ввода.', [
+            {text:'Позже',style:'cancel'},
+            {text:'Открыть настройки',onPress:()=>TermuxBridge.openAppPermissionSettings()},
+          ]);
+        return;
+      }
+    } catch(error) {
+      Alert.alert('Не удалось запросить доступ',
+        String(error.message || error) + '\n\nОткрой разрешения Qwen GitHub Agent в настройках Android.', [
+          {text:'Отмена',style:'cancel'},
+          {text:'Открыть настройки',onPress:()=>TermuxBridge.openAppPermissionSettings()},
+        ]);
+      return;
     }
     setInput('');
     setMessages(items=>[...items,{id:`u-${Date.now()}`,role:'user',text:prompt}]);

@@ -25,7 +25,7 @@
    ```
 
    The setup script installs Python, Git, Node.js and `@qwen-code/qwen-code`, copies the agent runner into `~/.local/bin/`, and enables `allow-external-apps=true` in `~/.termux/termux.properties`. You can inspect the setup script before running it. This is a one-time setup, **not a background service**.
-3. Open **Android Settings → Apps → Qwen GitHub Agent → Permissions → Additional permissions**, enable **Run commands in Termux environment**. This special permission is mandatory; the APK does not bypass it. Some Android builds show this permission under a slightly different heading.
+3. When sending the first task, the app now **asks Android for Run commands in Termux environment** permission. Approve the native Android dialog. If you declined it, tap **Open settings** in the app's explanation to visit **Android Settings → Apps → Qwen GitHub Agent → Permissions → Additional permissions** and enable it manually. This security permission is mandatory; the APK cannot bypass user consent. Some Android builds show it under a different heading.
 4. Install the APK from the [Android APK workflow](https://github.com/smaks190-crypto/qwen-github-mobile/actions/workflows/android-apk.yml) on GitHub. Select the latest **successful** run, then download its `qwen-github-mobile-apk-*` artifact ZIP and install `app-release.apk`.
 5. On first launch, tap **Settings**, fill in **GitHub token** and **AI API key**, select provider, model and repository, then **Save**. Do not paste these tokens into chat messages.
 

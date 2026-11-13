@@ -4,8 +4,11 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import expo.modules.kotlin.Promise
+import expo.modules.core.permissions.Permissions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.util.concurrent.ConcurrentHashMap
@@ -32,6 +35,27 @@ class TermuxBridgeModule : Module() {
       } else {
         // Cancels the Termux subprocess via an independent short-lived command.
         TermuxCommands.run(context, "{\"action\":\"cancel\",\"job_id\":\"${jobId.replace("\"", "")}\"}", promise)
+      }
+    }
+
+    // The user must consent to Termux's custom dangerous permission at runtime.
+    Function("hasTermuxPermission") {
+      val context = appContext.reactContext
+      context != null && context.checkSelfPermission("com.termux.permission.RUN_COMMAND") == PackageManager.PERMISSION_GRANTED
+    }
+
+    AsyncFunction("requestTermuxPermission") { promise: Promise ->
+      Permissions.askForPermissionsWithPermissionsManager(
+        appContext.permissions, promise, "com.termux.permission.RUN_COMMAND"
+      )
+    }
+
+    Function("openAppPermissionSettings") {
+      appContext.reactContext?.let { context ->
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+          Uri.parse("package:${context.packageName}"))
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
       }
     }
 
