@@ -37,11 +37,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android API 37
+      - name: Install Android API 37 preview platform
         run: |
-          # GitHub's Ubuntu image already includes Android SDK cmdline tools.
-          # Avoid setup-android@v3: it currently calls the removed "tools" package.
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
+          # SDK 37 ships under android-37.0 in the preview channel.
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --channel=3 "platforms;android-37.0" "build-tools;37.0.0"
+          status=${PIPESTATUS[1]}
+          test "$status" -eq 0
+          # Some Android Gradle Plugin versions still resolve the android-37 alias.
+          if [ -d "$ANDROID_HOME/platforms/android-37.0" ] && [ ! -e "$ANDROID_HOME/platforms/android-37" ]; then
+            ln -s android-37.0 "$ANDROID_HOME/platforms/android-37"
+          fi
 
       - name: Install mobile dependencies
         working-directory: mobile
