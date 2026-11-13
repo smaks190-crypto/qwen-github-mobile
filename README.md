@@ -9,11 +9,11 @@ A mobile chat for GitHub with **the actual Qwen Code agent** (not regex-parsed c
 - Real Qwen Code CLI in a Docker worker to read/modify cloned repositories. The worker never receives the GitHub token; host performs git operations.
 - Webhook HMAC signature verification, delivery idempotency, CI/PR/issue/push notification routing to only the registered devices subscribed to that repository.
 - SQLite task records and SQLite FTS5 chunk-based RAG; no heavy model installation for embeddings.
-- GitHub draft PR, no automatic merge. CI results come later via GitHub Actions webhook.
+- Qwen Code pushes an isolated branch, but does not create a PR automatically. A **Create PR** panel opens in Android after successful completion. The panel edits the title, description, base/head and opens GitHub's official PR form, where you choose standard or Draft PR and confirm publication.
 
 ## Important limitations
 - **Prototype, not production-ready.** Single-server process, single-owner shared access secret, SQLite in-process task queue; no proper OAuth/GitHub App, multi-tenant tenancy or scalable workers. For deployment beyond your own use, replace with GitHub App and user OAuth, proper durable queue, Docker isolation hardening + egress controls, security audit, rate limits and retention controls.
-- Draft PR creation is guarded by a confirmation, but the server is allowed to push a branch **after that confirmation**. Never run it against repositories you do not control.
+- Code tasks require approval before the agent edits files and pushes a branch. Publishing a PR requires a second, explicit action in GitHub. Never run it against repositories you do not control.
 - Qwen Code uses `--safe-mode --approval-mode auto-edit`, not dangerous YOLO. It may refuse operations it cannot do without an approved shell command. CI is **not** run synchronously in the worker; it must be verified in GitHub Actions.
 - The review task posts a general issue comment, not line-level GitHub Reviews. It is AI analysis, not a guarantee that all bugs are found.
 - RAG is local FTS5 lexical retrieval, not vector semantic embeddings. Index needs to be updated manually after repository changes.
@@ -47,6 +47,12 @@ curl -H "Authorization: Bearer YOUR_APP_API_TOKEN" https://YOUR_DOMAIN/repos
 
 Webhooks: repository > Settings > Webhooks > Add; URL `https://YOUR_DOMAIN/webhook/github`, content type `application/json`, secret `GITHUB_WEBHOOK_SECRET`; events `issues`, `pull_request`, `push`, `check_run`, `check_suite`, `workflow_run` as needed. Webhook endpoint is public but HMAC-verified.
 
+## Create PR panel
+
+After a completed code task has pushed its branch, the Android UI automatically opens **Создать PR** with the repository, source and target branches, title, and description. Tap **Продолжить в GitHub** to view the official GitHub form and review the diff; GitHub itself performs the final publish. You can also open the panel with **＋ PR** at any time. This step uses GitHub HTTPS links and does not need a separate PR API server or token in the phone app.
+
+**Scope:** The current prototype still requires the FastAPI backend to execute Qwen Code tasks and show tasks/chat. The planned Termux-only runtime replacing that backend is not implemented by this PR.
+
 ## Setup: Android
 
 Prerequisites: Node.js 22.13+, Android build environment or EAS build.
@@ -73,6 +79,7 @@ On first launch supply your **HTTPS backend URL** and **APP_API_TOKEN**. The UI 
 cd backend
 python -m pytest -q
 python -m compileall -q app
+cd ../mobile && node --test src/utils/pullRequest.test.mjs
 ```
 
 To run end-to-end tests, configure a disposable private GitHub repository, valid Qwen API key, an installed Docker daemon and Firebase test app. Confirm an issue, a review, a code task, and verify their effects on GitHub; check the Android build and webhook delivery history separately.
@@ -90,3 +97,5 @@ To run end-to-end tests, configure a disposable private GitHub repository, valid
 - Qwen authentication: https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/auth.md
 - Expo native notifications: https://docs.expo.dev/push-notifications/sending-notifications-custom/
 - GitHub webhook security: https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
+
+- GitHub official Create PR form URL: https://docs.github.com/en/pull-requests/reference/using-query-parameters-to-create-a-pull-request
