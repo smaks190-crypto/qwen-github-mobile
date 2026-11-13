@@ -125,7 +125,7 @@ export default function App() {
       }
     } catch(error) {
       Alert.alert('Не удалось запросить доступ',
-        String(error.message || error) + '\\n\\nОткрой разрешения Qwen GitHub Agent в настройках Android.', [
+        String(error.message || error) + '\n\nОткрой разрешения Qwen GitHub Agent в настройках Android.', [
           {text:'Отмена',style:'cancel'},
           {text:'Открыть настройки',onPress:()=>TermuxBridge.openAppPermissionSettings()},
         ]);
